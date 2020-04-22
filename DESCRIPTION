@@ -1,113 +1,105 @@
 Package: Seurat
-Version: 2.3.1
-Date: 2018-05-03
+Version: 3.1.5
+Date: 2020-04-14
 Title: Tools for Single Cell Genomics
-Description: A toolkit for quality control, analysis, and exploration of single cell RNA sequencing data. 'Seurat' aims to enable users to identify and interpret sources of heterogeneity from single cell transcriptomic measurements, and to integrate diverse types of single cell data. See Satija R, Farrell J, Gennert D, et al (2015) <doi:10.1038/nbt.3192>, Macosko E, Basu A, Satija R, et al (2015) <doi:10.1016/j.cell.2015.05.002>, and Butler A and Satija R (2017) <doi:10.1101/164889> for more details.
+Description: A toolkit for quality control, analysis, and exploration of single cell RNA sequencing data. 'Seurat' aims to enable users to identify and interpret sources of heterogeneity from single cell transcriptomic measurements, and to integrate diverse types of single cell data. See Satija R, Farrell J, Gennert D, et al (2015) <doi:10.1038/nbt.3192>, Macosko E, Basu A, Satija R, et al (2015) <doi:10.1016/j.cell.2015.05.002>, and Stuart T, Butler A, et al (2019) <doi:10.1016/j.cell.2019.05.031> for more details. Please note:  SDMTools is available is available from the CRAN archives with install.packages(<"https://cran.rstudio.com//src/contrib/Archive/SDMTools/SDMTools_1.1-221.2.tar.gz">, repos = NULL); it is not in the standard repositories.
 Authors@R: c(
-  person(given = 'Rahul', family = 'Satija', email = 'rsatija@nygenome.org', role = 'aut'),
+  person(given = 'Rahul', family = 'Satija', email = 'rsatija@nygenome.org', role = 'aut', comment = c(ORCID = '0000-0001-9448-8833')),
   person(given = 'Andrew', family = 'Butler', email = 'abutler@nygenome.org', role = 'aut', comment = c(ORCID = '0000-0003-3608-0463')),
-  person(given = 'Paul', family = 'Hoffman', email = 'seuratpackage@gmail.com', role = c('aut', 'cre'), comment = c(ORCID = '0000-0002-7693-8957')),
+  person(given = 'Paul', family = 'Hoffman', email = 'nygcSatijalab@nygenome.org', role = c('aut', 'cre'), comment = c(ORCID = '0000-0002-7693-8957')),
+  person(given = 'Tim', family = 'Stuart', email = 'tstuart@nygenome.org', role = 'aut', comment = c(ORCID = '0000-0002-3044-0897')),
   person(given = 'Jeff', family = 'Farrell', email = 'jfarrell@g.harvard.edu', role = 'ctb'),
   person(given = 'Shiwei', family = 'Zheng', email = 'szheng@nygenome.org', role = 'ctb', comment = c(ORCID = '0000-0001-6682-6743')),
   person(given = 'Christoph', family = 'Hafemeister', email = 'chafemeister@nygenome.org', role = 'ctb', comment = c(ORCID = '0000-0001-6365-8254')),
-  person(given = 'Patrick', family = 'Roelli', email = 'proelli@nygenome.org', role = 'ctb')
+  person(given = 'Patrick', family = 'Roelli', email = 'proelli@nygenome.org', role = 'ctb'),
+  person(given = "Yuhan", family = "Hao", email = 'yhao@nygenome.org', role = 'ctb', comment = c(ORCID = '0000-0002-1810-0822'))
   )
 URL: http://www.satijalab.org/seurat, https://github.com/satijalab/seurat
 BugReports: https://github.com/satijalab/seurat/issues
 Additional_repositories: https://mojaveazure.github.io/loomR
 Depends:
     R (>= 3.4.0),
-    ggplot2,
-    cowplot,
-    Matrix (>= 1.2.14),
-SystemRequirements: Java (>= 6)
-Imports:
     methods,
-    ROCR,
-    stringr,
-    mixtools,
-    lars,
-    ica,
-    tsne,
-    Rtsne,
-    fpc,
+Imports:
     ape,
-    VGAM,
-    pbapply,
-    igraph,
-    FNN,
-    RANN,
-    caret,
-    dplyr,
-    RColorBrewer,
-    MASS,
-    irlba,
-    reshape2,
-    gplots,
-    gdata,
-    Rcpp,
-    tclust,
-    ranger,
-    dtw,
-    SDMTools,
-    plotly,
-    diffusionMap,
-    Hmisc,
-    tidyr,
-    ggridges,
-    metap,
-    lmtest,
     cluster,
+    cowplot,
     fitdistrplus,
+    future,
+    future.apply,
+    ggplot2 (>= 3.0.0),
+    ggrepel,
+    ggridges,
+    graphics,
+    grDevices,
+    grid,
+    httr,
+    ica,
+    igraph,
+    irlba,
+    KernSmooth,
+    leiden (>= 0.3.1),
+    lmtest,
+    MASS,
+    Matrix (>= 1.2-14),
+    patchwork,
+    pbapply,
+    plotly,
     png,
-    doSNOW,
+    RANN,
+    RColorBrewer,
+    Rcpp,
+    RcppAnnoy,
     reticulate,
-    foreach,
-    phateR,
-    hdf5r
-LinkingTo: Rcpp, RcppEigen, RcppProgress
+    rlang,
+    ROCR,
+    rsvd,
+    Rtsne,
+    scales,
+    sctransform (>= 0.2.0),
+    stats,
+    tools,
+    tsne,
+    utils,
+    uwot (>= 0.1.5)
+LinkingTo: Rcpp (>= 0.11.0), RcppEigen, RcppProgress
 License: GPL-3 | file LICENSE
 LazyData: true
 Collate:
     'RcppExports.R'
-    'alignment.R'
-    'seurat.R'
-    'conversion.R'
-    'as.R'
-    'cluster_determination.R'
-    'cluster_determination_internal.R'
-    'cluster_validation.R'
+    'generics.R'
+    'clustering.R'
+    'visualization.R'
+    'convenience.R'
     'data.R'
-    'deprecated_functions.R'
     'differential_expression.R'
-    'differential_expression_internal.R'
     'dimensional_reduction.R'
-    'dimensional_reduction_internal.R'
-    'dimensional_reduction_utilities.R'
-    'interaction.R'
-    'jackstraw.R'
-    'jackstraw_internal.R'
-    'multi_modal.R'
-    'plotting.R'
-    'plotting_internal.R'
-    'plotting_utilities.R'
+    'integration.R'
+    'objects.R'
     'preprocessing.R'
-    'preprocessing_internal.R'
-    'printing_utilities.R'
-    'scoring.R'
-    'snn.R'
-    'spatial.R'
-    'spatial_internal.R'
-    'tSNE_project.R'
+    'tree.R'
     'utilities.R'
-    'utilities_internal.R'
-    'zfRenderSeurat.R'
-RoxygenNote: 6.0.1
+    'zzz.R'
+RoxygenNote: 7.1.0
+Encoding: UTF-8
+biocViews:
 Suggests:
-    testthat,
     loomR,
+    SDMTools,
+    testthat,
+    hdf5r,
     S4Vectors,
     SummarizedExperiment,
     SingleCellExperiment,
     MAST,
-    DESeq2
+    DESeq2,
+    BiocGenerics,
+    GenomicRanges,
+    GenomeInfoDb,
+    IRanges,
+    rtracklayer,
+    monocle,
+    Biobase,
+    VGAM,
+    limma,
+    metap

@@ -2,34 +2,48 @@
 % Please edit documentation in R/utilities.R
 \name{AverageExpression}
 \alias{AverageExpression}
-\title{Averaged gene expression by identity class}
+\title{Averaged feature expression by identity class}
 \usage{
-AverageExpression(object, genes.use = NULL, return.seurat = FALSE,
-  add.ident = NULL, use.scale = FALSE, use.raw = FALSE,
-  show.progress = TRUE, ...)
+AverageExpression(
+  object,
+  assays = NULL,
+  features = NULL,
+  return.seurat = FALSE,
+  add.ident = NULL,
+  slot = "data",
+  use.scale = FALSE,
+  use.counts = FALSE,
+  verbose = TRUE,
+  ...
+)
 }
 \arguments{
 \item{object}{Seurat object}
 
-\item{genes.use}{Genes to analyze. Default is all genes.}
+\item{assays}{Which assays to use. Default is all assays}
 
-\item{return.seurat}{Whether to return the data as a Seurat object. Default is false.}
+\item{features}{Features to analyze. Default is all features in the assay}
 
-\item{add.ident}{Place an additional label on each cell prior to averaging (very useful if you want to observe cluster averages, separated by replicate, for example).}
+\item{return.seurat}{Whether to return the data as a Seurat object. Default is FALSE}
 
-\item{use.scale}{Use scaled values for gene expression}
+\item{add.ident}{Place an additional label on each cell prior to averaging (very useful if you want to observe cluster averages, separated by replicate, for example)}
 
-\item{use.raw}{Use raw values for gene expression}
+\item{slot}{Slot to use; will be overriden by \code{use.scale} and \code{use.counts}}
 
-\item{show.progress}{Show progress bar (default is T)}
+\item{use.scale}{Use scaled values for feature expression}
 
-\item{...}{Arguments to be passed to methods such as \code{Seurat}}
+\item{use.counts}{Use count values for feature expression}
+
+\item{verbose}{Print messages and show progress bar}
+
+\item{...}{Arguments to be passed to methods such as \code{\link{CreateSeuratObject}}}
 }
 \value{
 Returns a matrix with genes as rows, identity classes as columns.
+If return.seurat is TRUE, returns an object of class \code{\link{Seurat}}.
 }
 \description{
-Returns gene expression for an 'average' single cell in each identity class
+Returns expression for an 'average' single cell in each identity class
 }
 \details{
 Output is in log-space when \code{return.seurat = TRUE}, otherwise it's in non-log space.
