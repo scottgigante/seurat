@@ -27,13 +27,13 @@ test_that("Row merging done correctly", {
   expect_equal(length(m3), 280)
 })
 
-test_that("Row merging with a list done correctly", {
-  m3 <- RowMergeMatricesList(mat_list = list(m1, m2), mat_rownames = list(m1.names, m2.names), all_rownames = all.names)
-  expect_equal(m3[1, 14], -0.17)
-  expect_equal(m3[3, 2], -1.4)
-  expect_equal(m3[14, 18], -0.43)
-  expect_equal(length(m3), 280)
-})
+#test_that("Row merging with a list done correctly", {
+#  m3 <- RowMergeMatricesList(mat_list = list(m1, m2), mat_rownames = list(m1.names, m2.names), all_rownames = all.names)
+#  expect_equal(m3[1, 14], -0.17)
+#  expect_equal(m3[3, 2], -1.4)
+#  expect_equal(m3[14, 18], -0.43)
+#  expect_equal(length(m3), 280)
+#})
 
 # Tests for log normalization
 # --------------------------------------------------------------------------------
@@ -91,23 +91,23 @@ test_that("Fast implementation of row scaling returns expected values", {
   expect_true(max(mat.clipped, na.rm = T) >= 0.2)
 })
 
-mat <- as(object = matrix(rnorm(1000), nrow = 10, ncol = 10), Class = "dgCMatrix")
+mat <- as(object = matrix(rnorm(100), nrow = 10, ncol = 10), Class = "dgCMatrix")
 
 test_that("Row scaling with known stats works", {
   mat.rowmeans <- rowMeans(x = mat)
   mat.sd <- apply(X = mat, MARGIN = 1, FUN = sd)
   expect_equal(
-    t(scale(t(as.matrix(mat)), center = mat.rowmeans, scale = mat.sd)), 
+    t(scale(t(as.matrix(mat)), center = mat.rowmeans, scale = mat.sd)),
     FastSparseRowScaleWithKnownStats(mat = mat, mu = mat.rowmeans, sigma = mat.sd, scale = TRUE, center = TRUE, scale_max = 10, display_progress = FALSE),
     check.attributes = FALSE
   )
   expect_equal(
-    t(scale(t(as.matrix(mat)), center = FALSE, scale = mat.sd)), 
+    t(scale(t(as.matrix(mat)), center = FALSE, scale = mat.sd)),
     FastSparseRowScaleWithKnownStats(mat = mat, mu = mat.rowmeans, sigma = mat.sd, scale = TRUE, center = FALSE, scale_max = 10, display_progress = FALSE),
     check.attributes = FALSE
   )
   expect_equal(
-    t(scale(t(as.matrix(mat)), center = mat.rowmeans, scale = FALSE)), 
+    t(scale(t(as.matrix(mat)), center = mat.rowmeans, scale = FALSE)),
     FastSparseRowScaleWithKnownStats(mat = mat, mu = mat.rowmeans, sigma = mat.sd, scale = FALSE, center = TRUE, scale_max = 10, display_progress = FALSE),
     check.attributes = FALSE
   )

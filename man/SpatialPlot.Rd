@@ -174,3 +174,6 @@ SpatialDimPlot(seurat.object, group.by = "clusters")
 }
 
 }
+\concept{convenience}
+\concept{spatial}
+\concept{visualization}

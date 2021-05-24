@@ -4,10 +4,13 @@
 \alias{PlotClusterTree}
 \title{Plot clusters as a tree}
 \usage{
-PlotClusterTree(object, ...)
+PlotClusterTree(object, direction = "downwards", ...)
 }
 \arguments{
 \item{object}{Seurat object}
+
+\item{direction}{A character string specifying the direction of the tree (default is downwards)
+Possible options: "rightwards", "leftwards", "upwards", and "downwards".}
 
 \item{\dots}{Additional arguments to
 \code{\link[ape:plot.phylo]{ape::plot.phylo}}}
@@ -19,7 +22,9 @@ Plots dendogram (must be precomputed using BuildClusterTree), returns no value
 Plots previously computed tree (from BuildClusterTree)
 }
 \examples{
+data("pbmc_small")
 pbmc_small <- BuildClusterTree(object = pbmc_small)
 PlotClusterTree(object = pbmc_small)
 
 }
+\concept{visualization}

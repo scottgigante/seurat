@@ -7,12 +7,16 @@
 FindTransferAnchors(
   reference,
   query,
-  normalization.method = c("LogNormalize", "SCT"),
+  normalization.method = "LogNormalize",
+  recompute.residuals = TRUE,
   reference.assay = NULL,
+  reference.neighbors = NULL,
   query.assay = NULL,
   reduction = "pcaproject",
+  reference.reduction = NULL,
   project.query = FALSE,
   features = NULL,
+  scale = TRUE,
   npcs = 30,
   l2.norm = TRUE,
   dims = 1:30,
@@ -20,9 +24,11 @@ FindTransferAnchors(
   k.filter = 200,
   k.score = 30,
   max.features = 200,
-  nn.method = "rann",
+  nn.method = "annoy",
+  n.trees = 50,
   eps = 0,
   approx.pca = TRUE,
+  mapping.score.k = NULL,
   verbose = TRUE
 )
 }
@@ -32,9 +38,15 @@ FindTransferAnchors(
 \item{query}{\code{\link{Seurat}} object to use as the query}
 
 \item{normalization.method}{Name of normalization method used: LogNormalize
-or SCT}
+or SCT.}
+
+\item{recompute.residuals}{If using SCT as a normalization method, compute
+query Pearson residuals using the reference SCT model parameters.}
 
 \item{reference.assay}{Name of the Assay to use from reference}
+
+\item{reference.neighbors}{Name of the Neighbor to use from the reference.
+Optionally enables reuse of precomputed neighbors.}
 
 \item{query.assay}{Name of the Assay to use from query}
 
@@ -43,19 +55,36 @@ Options are:
 \itemize{
    \item{pcaproject: Project the PCA from the reference onto the query. We
    recommend using PCA when reference and query datasets are from scRNA-seq}
+   \item{lsiproject: Project the LSI from the reference onto the query. We
+   recommend using LSI when reference and query datasets are from scATAC-seq.
+   This requires that LSI has been computed for the reference dataset, and the
+   same features (eg, peaks or genome bins) are present in both the reference
+   and query. See \code{\link[Signac]{RunTFIDF}} and
+   \code{\link[Signac]{RunSVD}}}
+   \item{rpca: Project the PCA from the reference onto the query, and the PCA
+   from the query onto the reference (reciprocal PCA projection).}
    \item{cca: Run a CCA on the reference and query }
 }}
 
+\item{reference.reduction}{Name of dimensional reduction to use from the
+reference if running the pcaproject workflow. Optionally enables reuse of
+precomputed reference dimensional reduction. If NULL (default), use a PCA
+computed on the reference object.}
+
 \item{project.query}{Project the PCA from the query dataset onto the
 reference. Use only in rare cases where the query dataset has a much larger
-cell number, but the reference dataset has a unique assay for transfer.}
+cell number, but the reference dataset has a unique assay for transfer. In
+this case, the default features will be set to the variable features of the
+query object that are alos present in the reference.}
 
 \item{features}{Features to use for dimensional reduction. If not specified,
 set as variable features of the reference object which are also present in
 the query.}
 
-\item{npcs}{Number of PCs to compute on reference. If null, then use an
-existing PCA structure in the reference object}
+\item{scale}{Scale query data.}
+
+\item{npcs}{Number of PCs to compute on reference if reference.reduction is
+not provided.}
 
 \item{l2.norm}{Perform L2 normalization on the cell embeddings after
 dimensional reduction}
@@ -65,7 +94,8 @@ neighbor search space}
 
 \item{k.anchor}{How many neighbors (k) to use when finding anchors}
 
-\item{k.filter}{How many neighbors (k) to use when filtering anchors}
+\item{k.filter}{How many neighbors (k) to use when filtering anchors. Set to
+NA to turn off filtering.}
 
 \item{k.score}{How many neighbors (k) to use when scoring anchors}
 
@@ -75,17 +105,31 @@ neighborhood search space in the anchor filtering}
 \item{nn.method}{Method for nearest neighbor finding. Options include: rann,
 annoy}
 
+\item{n.trees}{More trees gives higher precision when using annoy approximate
+nearest neighbor search}
+
 \item{eps}{Error bound on the neighbor finding algorithm (from
-\code{\link{RANN}})}
+\code{\link{RANN}} or \code{\link{RcppAnnoy}})}
 
 \item{approx.pca}{Use truncated singular value decomposition to approximate
 PCA}
+
+\item{mapping.score.k}{Compute and store nearest k query neighbors in the
+AnchorSet object that is returned. You can optionally set this if you plan
+on computing the mapping score and want to enable reuse of some downstream
+neighbor calculations to make the mapping score function more efficient.}
 
 \item{verbose}{Print progress bars and output}
 }
 \value{
 Returns an \code{AnchorSet} object that can be used as input to
-\code{\link{TransferData}}
+\code{\link{TransferData}}, \code{\link{IntegrateEmbeddings}} and
+\code{\link{MapQuery}}. The dimension reduction used for finding anchors is
+stored in the \code{AnchorSet} object and can be used for computing anchor
+weights in downstream functions. Note that only the requested dimensions are
+stored in the dimension reduction object in the \code{AnchorSet}. This means
+that if \code{dims=2:20} is used, for example, the dimension of the stored
+reduction is \code{1:19}.
 }
 \description{
 Find a set of anchors between a reference and query object. These
@@ -95,8 +139,7 @@ query object using the \code{\link{TransferData}} object.
 \details{
 The main steps of this procedure are outlined below. For a more detailed
 description of the methodology, please see Stuart, Butler, et al Cell 2019.
-\url{https://doi.org/10.1016/j.cell.2019.05.031};
-\url{https://doi.org/10.1101/460147}
+\doi{10.1016/j.cell.2019.05.031}; \doi{10.1101/460147}
 
 \itemize{
 
@@ -107,8 +150,11 @@ description of the methodology, please see Stuart, Butler, et al Cell 2019.
   \code{project.query = TRUE}), using the \code{features} specified. The data
   from the other dataset is then projected onto this learned PCA structure.
   If \code{reduction = "cca"}, then CCA is performed on the reference and
-  query for this dimensional reduction step. If \code{l2.norm} is set to
-  \code{TRUE}, perform L2 normalization of the embedding vectors.}
+  query for this dimensional reduction step. If
+  \code{reduction = "lsiproject"}, the stored LSI dimension reduction in the
+  reference object is used to project the query dataset onto the reference.
+  If \code{l2.norm} is set to \code{TRUE}, perform L2 normalization of the
+  embedding vectors.}
   \item{Identify anchors between the reference and query - pairs of cells
   from each dataset that are contained within each other's neighborhoods
   (also known as mutual nearest neighbors).}
@@ -159,6 +205,6 @@ pbmc.query <- AddMetaData(object = pbmc.query, metadata = predictions)
 }
 \references{
 Stuart T, Butler A, et al. Comprehensive Integration of
-Single-Cell Data. Cell. 2019;177:1888-1902 \url{https://doi.org/10.1016/
-j.cell.2019.05.031};
+Single-Cell Data. Cell. 2019;177:1888-1902 \doi{10.1016/j.cell.2019.05.031};
 }
+\concept{integration}

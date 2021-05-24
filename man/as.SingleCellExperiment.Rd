@@ -14,8 +14,9 @@ as.SingleCellExperiment(x, ...)
 
 \item{...}{Arguments passed to other methods}
 
-\item{assay}{Assay to convert}
+\item{assay}{Assays to convert}
 }
 \description{
 Convert objects to SingleCellExperiment objects
 }
+\concept{objects}

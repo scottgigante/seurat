@@ -40,11 +40,13 @@ NULL
 #' @importFrom stats ave aggregate
 #'
 #' @export
+#' @concept preprocessing
 #'
 #' @author Robert A. Amezquita, \email{robert.amezquita@fredhutch.org}
 #' @seealso \code{\link{BarcodeInflectionsPlot}} \code{\link{SubsetByBarcodeInflections}}
 #'
 #' @examples
+#' data("pbmc_small")
 #' CalculateBarcodeInflections(pbmc_small, group.column = 'groups')
 #'
 CalculateBarcodeInflections <- function(
@@ -153,123 +155,6 @@ CalculateBarcodeInflections <- function(
   return(object)
 }
 
-#' Convert a peak matrix to a gene activity matrix
-#'
-#' This function will take in a peak matrix and an annotation file (gtf) and collapse the peak
-#' matrix to a gene activity matrix. It makes the simplifying assumption that all counts in the gene
-#' body plus X kb up and or downstream should be attributed to that gene.
-#'
-#' @param peak.matrix Matrix of peak counts
-#' @param annotation.file Path to GTF annotation file
-#' @param seq.levels Which seqlevels to keep (corresponds to chromosomes usually)
-#' @param include.body Include the gene body?
-#' @param upstream Number of bases upstream to consider
-#' @param downstream Number of bases downstream to consider
-#' @param keep.sparse Leave the matrix as a sparse matrix. Setting this option to
-#' TRUE will take much longer but will use less memory. This can be useful if
-#' you have a very large matrix that cannot fit into memory when converted to
-#' a dense form.
-#' @param verbose Print progress/messages
-#'
-#' @importFrom future nbrOfWorkers
-#' @export
-#'
-CreateGeneActivityMatrix <- function(
-  peak.matrix,
-  annotation.file,
-  seq.levels = c(1:22, "X", "Y"),
-  include.body = TRUE,
-  upstream = 2000,
-  downstream = 0,
-  keep.sparse = FALSE,
-  verbose = TRUE
-) {
-  .Deprecated(
-    new = 'Signac::GeneActivity',
-    msg = paste(
-      "CreateGeneActivityMatrix functionality is being moved to Signac.",
-      "Equivalent functionality can be",
-      "achieved via the Signac::GeneActivity function; for",
-      "more information on Signac, please see https://github.com/timoast/Signac"
-    )
-  )
-  if (!PackageCheck('GenomicRanges', error = FALSE)) {
-    stop("Please install GenomicRanges from Bioconductor.")
-  }
-  if (!PackageCheck('rtracklayer', error = FALSE)) {
-    stop("Please install rtracklayer from Bioconductor.")
-  }
-  # convert peak matrix to GRanges object
-  peak.df <- rownames(x = peak.matrix)
-  peak.df <- do.call(what = rbind, args = strsplit(x = gsub(peak.df, pattern = ":", replacement = "-"), split = "-"))
-  peak.df <- as.data.frame(x = peak.df)
-  colnames(x = peak.df) <- c("chromosome", 'start', 'end')
-  peaks.gr <- GenomicRanges::makeGRangesFromDataFrame(df = peak.df)
-
-  # if any peaks start at 0, change to 1
-  # otherwise GenomicRanges::distanceToNearest will not work
-  BiocGenerics::start(peaks.gr[BiocGenerics::start(peaks.gr) == 0, ]) <- 1
-
-  # get annotation file, select genes
-  gtf <- rtracklayer::import(con = annotation.file)
-  gtf <- GenomeInfoDb::keepSeqlevels(x = gtf, value = seq.levels, pruning.mode = 'coarse')
-
-  # change seqlevelsStyle if not the same
-  if (!any(GenomeInfoDb::seqlevelsStyle(x = gtf) == GenomeInfoDb::seqlevelsStyle(x = peaks.gr))) {
-    GenomeInfoDb::seqlevelsStyle(gtf) <- GenomeInfoDb::seqlevelsStyle(peaks.gr)
-  }
-  gtf.genes <- gtf[gtf$type == 'gene']
-
-  # Extend definition up/downstream
-  if (include.body) {
-    gtf.body_prom <- Extend(x = gtf.genes, upstream = upstream, downstream = downstream)
-  } else {
-    gtf.body_prom <- SummarizedExperiment::promoters(x = gtf.genes, upstream = upstream, downstream = downstream)
-  }
-  gene.distances <- GenomicRanges::distanceToNearest(x = peaks.gr, subject = gtf.body_prom)
-  keep.overlaps <- gene.distances[rtracklayer::mcols(x = gene.distances)$distance == 0]
-  peak.ids <- peaks.gr[S4Vectors::queryHits(x = keep.overlaps)]
-  gene.ids <- gtf.genes[S4Vectors::subjectHits(x = keep.overlaps)]
-
-  # Some GTF rows will not have gene_name attribute
-  # Replace it by gene_id attribute
-  gene.ids$gene_name[is.na(gene.ids$gene_name)] <- gene.ids$gene_id[is.na(gene.ids$gene_name)]
-
-  peak.ids$gene.name <- gene.ids$gene_name
-  peak.ids <- as.data.frame(x = peak.ids)
-  peak.ids$peak <- rownames(peak.matrix)[S4Vectors::queryHits(x = keep.overlaps)]
-  annotations <- peak.ids[, c('peak', 'gene.name')]
-  colnames(x = annotations) <- c('feature', 'new_feature')
-
-  # collapse into expression matrix
-  if (!keep.sparse) {
-    peak.matrix <- as(object = peak.matrix, Class = 'matrix')
-  }
-  all.features <- unique(x = annotations$new_feature)
-
-  if (nbrOfWorkers() > 1) {
-    mysapply <- future_sapply
-  } else {
-    mysapply <- ifelse(test = verbose, yes = pbsapply, no = sapply)
-  }
-  newmat.list <- mysapply(X = 1:length(x = all.features), FUN = function(x){
-    features.use <- annotations[annotations$new_feature == all.features[[x]], ]$feature
-    submat <- peak.matrix[features.use, ]
-    if (length(x = features.use) > 1) {
-      submat <- Matrix::colSums(submat)
-    }
-    if (keep.sparse) {
-      return(as(object = as.matrix(x = submat), Class = 'dgCMatrix'))
-    } else {
-      return(as.matrix(x = submat))
-    }
-  }, simplify = FALSE)
-  newmat = do.call(what = cbind, args = newmat.list)
-  newmat <- t(x = newmat)
-  rownames(x = newmat) <- all.features
-  return(as(object = newmat, Class = 'dgCMatrix'))
-}
-
 #' Demultiplex samples based on data from cell 'hashing'
 #'
 #' Assign sample-of-origin for each cell, annotate doublets.
@@ -300,6 +185,7 @@ CreateGeneActivityMatrix <- function(
 #' @importFrom stats pnbinom kmeans
 #'
 #' @export
+#' @concept preprocessing
 #'
 #' @seealso \code{\link{HTOHeatmap}}
 #'
@@ -448,140 +334,126 @@ HTODemux <- function(
 #' @param object A seurat object
 #' @param features Name of features to add into the scale.data
 #' @param assay Name of the assay of the seurat object generated by SCTransform
-#' @param umi.assay Name of the assay of the seurat object containing UMI matrix and the default is
-#' RNA
-#' @param clip.range Numeric of length two specifying the min and max values the Pearson residual
-#' will be clipped to
-#' @param replace.value Recalculate residuals for all features, even if they are already present.
-#' Useful if you want to change the clip.range.
+#' @param umi.assay Name of the assay of the seurat object containing UMI matrix
+#' and the default is RNA
+#' @param clip.range Numeric of length two specifying the min and max values the
+#' Pearson residual will be clipped to
+#' @param replace.value Recalculate residuals for all features, even if they are
+#' already present. Useful if you want to change the clip.range.
+#' @param na.rm For features where there is no feature model stored, return NA
+#' for residual value in scale.data when na.rm = FALSE. When na.rm is TRUE, only
+#' return residuals for features with a model stored for all cells.
 #' @param verbose Whether to print messages and progress bars
 #'
-#' @return Returns a Seurat object containing  pearson residuals of added features in its scale.data
+#' @return Returns a Seurat object containing Pearson residuals of added
+#' features in its scale.data
 #'
 #' @importFrom sctransform get_residuals
+#' @importFrom matrixStats rowAnyNAs
 #'
 #' @export
+#' @concept preprocessing
 #'
 #' @seealso \code{\link[sctransform]{get_residuals}}
 #'
 #' @examples
+#' data("pbmc_small")
 #' pbmc_small <- SCTransform(object = pbmc_small, variable.features.n = 20)
 #' pbmc_small <- GetResidual(object = pbmc_small, features = c('MS4A1', 'TCL1A'))
 #'
 GetResidual <- function(
   object,
   features,
-  assay = "SCT",
+  assay = NULL,
   umi.assay = NULL,
   clip.range = NULL,
   replace.value = FALSE,
+  na.rm = TRUE,
   verbose = TRUE
 ) {
-  if (!IsSCT(assay = object[[assay]])) {
+  assay <- assay %||% DefaultAssay(object = object)
+  if (IsSCT(assay = object[[assay]])) {
+    object[[assay]] <- as(object[[assay]], 'SCTAssay')
+  }
+  if (!inherits(x = object[[assay]], what = "SCTAssay")) {
     stop(assay, " assay was not generated by SCTransform")
   }
-  umi.assay <- umi.assay %||% Misc(object = object[[assay]], slot = "umi.assay")
-  umi.assay <- umi.assay %||% "RNA" # for object created in 3.1.1 or earlier, default to RNA
-  if (replace.value) {
-    new_features <- features
-  } else {
-    new_features <- setdiff(
-      x = features,
-      y = rownames(x = GetAssayData(object = object, assay = assay, slot = "scale.data"))
-    )
+  sct.models <- levels(x = object[[assay]])
+  if (length(x = sct.models) == 0) {
+    warning("SCT model not present in assay", call. = FALSE, immediate. = TRUE)
+    return(object)
   }
-  if (length(x = new_features) == 0) {
-    if (verbose) {
-      message("Pearson residuals of input features exist already")
+  possible.features <- unique(x = unlist(x = lapply(X = sct.models, FUN = function(x) {
+    rownames(x = SCTResults(object = object[[assay]], slot = "feature.attributes", model = x))
+  }
+  )))
+  bad.features <- setdiff(x = features, y = possible.features)
+  if (length(x = bad.features) > 0) {
+    warning("The following requested features are not present in any models: ",
+            paste(bad.features, collapse = ", "), call. = FALSE)
+    features <- intersect(x = features, y = possible.features)
+  }
+  features.orig <- features
+  if (na.rm) {
+    # only compute residuals when feature model info is present in all
+    features <- names(x = which(x = table(unlist(x = lapply(
+      X = sct.models,
+      FUN = function(x) {
+        rownames(x = SCTResults(object = object[[assay]], slot = "feature.attributes", model = x))
+      }
+    ))) == length(x = sct.models)))
+    if (length(x = features) == 0) {
+      return(object)
     }
-  } else {
-    if (is.null(x = Misc(object = object[[assay]], slot = 'vst.set'))) {
-      vst_out <- Misc(object = object[[assay]], slot = 'vst.out')
-      # filter cells not in the object but in the SCT model
-      vst_out$cell_attr <- vst_out$cell_attr[Cells(x = object), ]
-      vst_out$cells_step1 <- intersect(x = vst_out$cells_step1, y = Cells(x = object))
-      object <- GetResidualVstOut(
+  }
+  features <- intersect(x = features.orig, y = features)
+  if (length(x = sct.models) > 1 & verbose) {
+    message("This SCTAssay contains multiple SCT models. Computing residuals for cells using")
+  }
+  new.residuals <- lapply(
+    X = sct.models,
+    FUN = function(x) {
+      GetResidualSCTModel(
         object = object,
         assay = assay,
-        umi.assay = umi.assay,
-        new_features = new_features,
-        vst_out = vst_out,
+        SCTModel = x,
+        new_features = features,
+        replace.value = replace.value,
         clip.range = clip.range,
         verbose = verbose
       )
-  } else {
-    # Calculate Pearson Residual from integrated object SCT assay
-    vst.set <- Misc(object = object[[assay]], slot = 'vst.set')
-    scale.data <- GetAssayData(
-      object = object,
-      assay = assay,
-      slot = "scale.data"
-    )
-
-    vst_set_genes <-  sapply(1:length(vst.set), function(x) rownames(vst.set[[x]]$model_pars_fit))
-    vst_set_genes <- Reduce(intersect, vst_set_genes)
-    diff_features <- setdiff(
-      x = new_features,
-      y = vst_set_genes
-    )
-    if (length(x = diff_features) !=0) {
-      warning(
-        "The following ", length(x = diff_features),
-        " features do not exist in all SCT models: ",
-        paste(diff_features, collapse = " ")
-      )
     }
-    new_features <- intersect(
-      x = new_features,
-      y = vst_set_genes
-    )
-    if (length(new_features) != 0){
-    object <- SetAssayData(
-      object = object,
-      assay = assay,
-      slot = "scale.data",
-      new.data = scale.data[!rownames(x = scale.data) %in% new_features, , drop = FALSE]
-    )
-    new.scale.data <- matrix(nrow = length(new_features), ncol = 0)
-    rownames(x = new.scale.data) <- new_features
-    for (v in 1:length(x = vst.set)) {
-      vst_out <- vst.set[[v]]
-      # confirm that cells from SCT model also exist in the integrated object
-      cells.v <- intersect(x = rownames(x = vst_out$cell_attr), y = Cells(x = object))
-      if (length(x = cells.v) != 0) {
-        vst_out$cell_attr <- vst_out$cell_attr[cells.v, ]
-        vst_out$cells_step1 <- intersect(x = vst_out$cells_step1, y = cells.v)
-        object.v <- subset(x = object, cells = cells.v)
-        object.v <- GetResidualVstOut(
-          object = object.v,
-          assay = assay,
-          umi.assay = umi.assay[[v]],
-          new_features = new_features,
-          vst_out = vst_out,
-          clip.range = clip.range,
-          verbose = verbose
-        )
-        new.scale.data <- cbind(
-          new.scale.data,
-          GetAssayData(
-            object = object.v,
-            assay = assay,
-            slot ="scale.data")[new_features, , drop = FALSE]
-        )
-      }
-    }
-
-    object <- SetAssayData(
-      object = object,
-      assay = assay,
-      slot = "scale.data",
-      new.data = rbind(
-        GetAssayData(object = object, slot = 'scale.data', assay = assay),
-        new.scale.data
-      )
-    )
-    }
+  )
+  existing.data <- GetAssayData(object = object, slot = 'scale.data', assay = assay)
+  all.features <- union(x = rownames(x = existing.data), y = features)
+  new.scale <- matrix(
+    data = NA,
+    nrow = length(x = all.features),
+    ncol = ncol(x = object),
+    dimnames = list(all.features, Cells(x = object))
+  )
+  if (nrow(x = existing.data) > 0){
+    new.scale[1:nrow(x = existing.data), ] <- existing.data
   }
+  if (length(x = new.residuals) == 1 & is.list(x = new.residuals)) {
+    new.residuals <- new.residuals[[1]]
+  } else {
+    new.residuals <- Reduce(cbind, new.residuals)
+  }
+  new.scale[rownames(x = new.residuals), colnames(x = new.residuals)] <- new.residuals
+  if (na.rm) {
+    new.scale <- new.scale[!rowAnyNAs(x = new.scale), ]
+  }
+  object <- SetAssayData(
+    object = object,
+    assay = assay,
+    slot = "scale.data",
+    new.data = new.scale
+  )
+  if (any(!features.orig %in% rownames(x = new.scale))) {
+    bad.features <- features.orig[which(!features.orig %in% rownames(x = new.scale))]
+    warning("Residuals not computed for the following requested features: ",
+            paste(bad.features, collapse = ", "), call. = FALSE)
   }
   return(object)
 }
@@ -589,7 +461,9 @@ GetResidual <- function(
 #' Load a 10x Genomics Visium Spatial Experiment into a \code{Seurat} object
 #'
 #' @inheritParams Read10X
-#' @inheritParams CreateSeuratObject
+#' @inheritParams SeuratObject::CreateSeuratObject
+#' @param data.dir Directory containing the H5 file specified by \code{filename}
+#' and the image data in a subdirectory called \code{spatial}
 #' @param filename Name of H5 file containing the feature barcode matrix
 #' @param slice Name for the stored image of the tissue slice
 #' @param filter.matrix Only keep spots that have been determined to be over
@@ -605,6 +479,7 @@ GetResidual <- function(
 #' @importFrom jsonlite fromJSON
 #'
 #' @export
+#' @concept preprocessing
 #'
 #' @examples
 #' \dontrun{
@@ -622,6 +497,10 @@ Load10X_Spatial <- function(
   to.upper = FALSE,
   ...
 ) {
+  if (length(x = data.dir) > 1) {
+    warning("'Load10X_Spatial' accepts only one 'data.dir'", immediate. = TRUE)
+    data.dir <- data.dir[1]
+  }
   data <- Read10X_h5(filename = file.path(data.dir, filename), ...)
   if (to.upper) {
     rownames(x = data) <- toupper(x = rownames(x = data))
@@ -656,6 +535,7 @@ Load10X_Spatial <- function(
 #' @seealso \code{\link{STARmap}}
 #'
 #' @export
+#' @concept preprocessing
 #'
 LoadSTARmap <- function(
   data.dir,
@@ -721,6 +601,7 @@ LoadSTARmap <- function(
 #' @importFrom methods as
 #'
 #' @export
+#' @concept preprocessing
 #'
 #' @examples
 #' mat <- matrix(data = rbinom(n = 25, size = 5, prob = 0.2), nrow = 5)
@@ -762,6 +643,7 @@ LogNormalize <- function(data, scale.factor = 1e4, verbose = TRUE) {
 #' @import Matrix
 #'
 #' @export
+#' @concept preprocessing
 #'
 #' @references \url{https://www.biorxiv.org/content/10.1101/387241v1}
 #'
@@ -849,130 +731,6 @@ MULTIseqDemux <- function(
   return(object)
 }
 
-#' Load in data from Alevin pipeline
-#'
-#' Enables easy loading of csv format matrix provided by Alevin
-#' ran with `--dumpCsvCounts` flags.
-#'
-#' @param base.path Directory containing the alevin/quant_mat*
-#' files provided by Alevin.
-#'
-#' @return Returns a matrix with rows and columns labeled
-#'
-#' @importFrom utils read.csv read.delim
-#' @export
-#'
-#' @author Avi Srivastava
-#'
-#' @examples
-#' \dontrun{
-#' data_dir <- 'path/to/output/directory'
-#' list.files(data_dir) # Should show alevin/quants_mat* files
-#' expression_matrix <- ReadAlevinCsv(base.path = data_dir)
-#' seurat_object = CreateSeuratObject(counts = expression_matrix)
-#' }
-#'
-ReadAlevinCsv <- function(base.path) {
-  .Deprecated(
-    new = "SeuratWrappers::ReadAlevin",
-    msg = paste(
-      "Reading data from Alevin files is being moved to SeuratWrappers",
-      "Details can be found at https://github.com/satijalab/seurat-wrappers",
-      sep = '\n'
-    )
-  )
-  if (!dir.exists(base.path)) {
-    stop("Directory provided does not exist")
-  }
-  barcode.loc <- file.path(base.path, "alevin", "quants_mat_rows.txt")
-  gene.loc <- file.path(base.path, "alevin", "quants_mat_cols.txt")
-  matrix.loc <- file.path( base.path, "alevin", "quants_mat.csv" )
-  if (!file.exists(barcode.loc)) {
-    stop("Barcode file missing")
-  }
-  if (!file.exists(gene.loc)) {
-    stop("Gene name file missing")
-  }
-  if (!file.exists(matrix.loc)) {
-    stop("Expression matrix file missing")
-  }
-  matrix <- as.matrix(x = read.csv(file = matrix.loc, header = FALSE))
-  matrix <- t(x = matrix[, 1:ncol(x = matrix) - 1])
-  cell.names <- readLines(con = barcode.loc)
-  gene.names <- readLines(con = gene.loc)
-  colnames(x = matrix) <- cell.names
-  rownames(x = matrix) <- gene.names
-  matrix[is.na(x = matrix)] <- 0
-  return(matrix)
-}
-
-#' Load in data from Alevin pipeline
-#'
-#' Enables easy loading of binary format matrix provided by Alevin
-#'
-#' @param base.path Directory containing the alevin/quant_mat*
-#' files provided by Alevin.
-#'
-#' @return Returns a matrix with rows and columns labeled
-#'
-#' @export
-#'
-#' @author Avi Srivastava
-#'
-#' @examples
-#' \dontrun{
-#' data_dir <- 'path/to/output/directory'
-#' list.files(data_dir) # Should show alevin/quants_mat* files
-#' expression_matrix <- ReadAlevin(base.path = data_dir)
-#' seurat_object = CreateSeuratObject(counts = expression_matrix)
-#' }
-#'
-ReadAlevin <- function(base.path) {
-  .Deprecated(
-    new = "SeuratWrappers::ReadAlevin",
-    msg = paste(
-      "Reading data from Alevin files is being moved to SeuratWrappers",
-      "Details can be found at https://github.com/satijalab/seurat-wrappers",
-      sep = '\n'
-    )
-  )
-  if (!dir.exists(base.path)) {
-    stop("Directory provided does not exist")
-  }
-  barcode.loc <- file.path(base.path, "alevin", "quants_mat_rows.txt")
-  gene.loc <- file.path(base.path, "alevin", "quants_mat_cols.txt")
-  matrix.loc <- file.path(base.path, "alevin", "quants_mat.gz")
-  if (!file.exists(barcode.loc)) {
-    stop("Barcode file missing")
-  }
-  if (!file.exists(gene.loc)) {
-    stop("Gene name file missing")
-  }
-  if (!file.exists(matrix.loc)) {
-    stop("Expression matrix file missing")
-  }
-  cell.names <- readLines(con = barcode.loc)
-  gene.names <- readLines(con = gene.loc)
-  num.cells <- length(x = cell.names)
-  num.genes <- length(x = gene.names)
-  out.matrix <- matrix(data = NA, nrow = num.genes, ncol = num.cells)
-  con <- gzcon(con = file(description = matrix.loc, open = "rb"))
-  total.molecules <- 0.0
-  for (n in seq_len(length.out = num.cells)) {
-    out.matrix[, n] <- readBin(
-      con = con,
-      what = double(),
-      endian = "little",
-      n = num.genes
-    )
-    total.molecules <- total.molecules + sum(out.matrix[, n])
-  }
-  colnames(x = out.matrix) <- cell.names
-  rownames(x = out.matrix) <- gene.names
-  message("Found total ", total.molecules, " molecules")
-  return(out.matrix)
-}
-
 #' Load in data from 10X
 #'
 #' Enables easy loading of sparse data matrices provided by 10X genomics.
@@ -982,6 +740,7 @@ ReadAlevin <- function(base.path) {
 #' several data directories. If a named vector is given, the cell barcode names
 #' will be prefixed with the name.
 #' @param gene.column Specify which column of genes.tsv or features.tsv to use for gene names; default is 2
+#' @param cell.column Specify which column of barcodes.tsv to use for cell names; default is 1
 #' @param unique.features Make feature names unique (default TRUE)
 #' @param strip.suffix Remove trailing "-1" if present in all cell barcodes.
 #'
@@ -990,8 +749,10 @@ ReadAlevin <- function(base.path) {
 #'   Otherwise a sparse matrix containing the expression data will be returned.
 #'
 #' @importFrom Matrix readMM
+#' @importFrom utils read.delim
 #'
 #' @export
+#' @concept preprocessing
 #'
 #' @examples
 #' \dontrun{
@@ -1010,8 +771,9 @@ ReadAlevin <- function(base.path) {
 #' }
 #'
 Read10X <- function(
-  data.dir = NULL,
+  data.dir,
   gene.column = 2,
+  cell.column = 1,
   unique.features = TRUE,
   strip.suffix = FALSE
 ) {
@@ -1044,7 +806,12 @@ Read10X <- function(
       stop("Expression matrix file missing. Expecting ", basename(path = matrix.loc))
     }
     data <- readMM(file = matrix.loc)
-    cell.names <- readLines(barcode.loc)
+    cell.barcodes <- read.table(file = barcode.loc, header = FALSE, sep = '\t', row.names = NULL)
+    if (ncol(x = cell.barcodes) > 1) {
+      cell.names <- cell.barcodes[, cell.column]
+    } else {
+      cell.names <- readLines(con = barcode.loc)
+    }
     if (all(grepl(pattern = "\\-1$", x = cell.names)) & strip.suffix) {
       cell.names <- as.vector(x = as.character(x = sapply(
         X = cell.names,
@@ -1054,7 +821,7 @@ Read10X <- function(
       )))
     }
     if (is.null(x = names(x = data.dir))) {
-      if (i < 2) {
+      if (length(x = data.dir) < 2) {
         colnames(x = data) <- cell.names
       } else {
         colnames(x = data) <- paste0(i, "_", cell.names)
@@ -1141,6 +908,7 @@ Read10X <- function(
 #' genomes are present, returns a list of sparse matrices (one per genome).
 #'
 #' @export
+#' @concept preprocessing
 #'
 Read10X_h5 <- function(filename, use.names = TRUE, unique.features = TRUE) {
   if (!requireNamespace('hdf5r', quietly = TRUE)) {
@@ -1152,7 +920,7 @@ Read10X_h5 <- function(filename, use.names = TRUE, unique.features = TRUE) {
   infile <- hdf5r::H5File$new(filename = filename, mode = 'r')
   genomes <- names(x = infile)
   output <- list()
-  if (!infile$attr_exists("PYTABLES_FORMAT_VERSION")) {
+  if (hdf5r::existsGroup(infile, 'matrix')) {
     # cellranger version 3
     if (use.names) {
       feature_slot <- 'features/name'
@@ -1229,6 +997,7 @@ Read10X_h5 <- function(filename, use.names = TRUE, unique.features = TRUE) {
 #' @seealso \code{\link{VisiumV1}} \code{\link{Load10X_Spatial}}
 #'
 #' @export
+#' @concept preprocessing
 #'
 Read10X_Image <- function(image.dir, filter.matrix = TRUE, ...) {
   image <- readPNG(source = file.path(image.dir, 'tissue_lowres_image.png'))
@@ -1259,6 +1028,201 @@ Read10X_Image <- function(image.dir, filter.matrix = TRUE, ...) {
   ))
 }
 
+#' Load in data from remote or local mtx files
+#'
+#' Enables easy loading of sparse data matrices
+#'
+#' @param mtx Name or remote URL of the mtx file
+#' @param cells Name or remote URL of the cells/barcodes file
+#' @param features Name or remote URL of the features/genes file
+#' @param cell.column Specify which column of cells file to use for cell names; default is 1
+#' @param feature.column Specify which column of features files to use for feature/gene names; default is 2
+#' @param skip.cell Number of lines to skip in the cells file before beginning to read cell names
+#' @param skip.feature Number of lines to skip in the features file before beginning to gene names
+#' @param unique.features Make feature names unique (default TRUE)
+#' @param strip.suffix Remove trailing "-1" if present in all cell barcodes.
+#'
+#' @return A sparse matrix containing the expression data.
+#'
+#' @importFrom Matrix readMM
+#' @importFrom utils read.delim
+#' @importFrom httr build_url parse_url
+#' @importFrom tools file_ext
+#'
+#'
+#' @export
+#' @concept preprocessing
+#'
+#' @examples
+#' \dontrun{
+#' # For local files:
+#'
+#' expression_matrix <- ReadMtx(
+#'   mtx = "count_matrix.mtx.gz", features = "features.tsv.gz",
+#'   cells = "barcodes.tsv.gz"
+#' )
+#' seurat_object <- CreateSeuratObject(counts = expression_matrix)
+#'
+#' # For remote files:
+#'
+#' expression_matrix <- ReadMtx(mtx = "http://localhost/matrix.mtx",
+#' cells = "http://localhost/barcodes.tsv",
+#' features = "http://localhost/genes.tsv")
+#' seurat_object <- CreateSeuratObject(counts = data)
+#' }
+#'
+ReadMtx <- function(
+  mtx,
+  cells,
+  features,
+  cell.column = 1,
+  feature.column = 2,
+  skip.cell = 0,
+  skip.feature = 0,
+  unique.features = TRUE,
+  strip.suffix = FALSE
+) {
+  all.files <- list(
+    "expression matrix" = mtx,
+    "barcode list" = cells,
+    "feature list" = features
+  )
+  for (i in seq_along(along.with = all.files)) {
+    uri <- all.files[[i]]
+    err <- paste("Cannot find", names(x = all.files)[i], "at", uri)
+    uri <- build_url(url = parse_url(url = uri))
+    if (grepl(pattern = '^:///', x = uri)) {
+      uri <- gsub(pattern = '^:///', replacement = '', x = uri)
+      if (!file.exists(uri)) {
+        stop(err, call. = FALSE)
+      }
+    } else {
+      if (!Online(url = uri, seconds = 2L)) {
+        stop(err, call. = FALSE)
+      }
+      if (file_ext(uri) == 'gz') {
+        con <- url(description = uri)
+        uri <- gzcon(con = con, text = TRUE)
+      }
+    }
+    all.files[[i]] <- uri
+  }
+  cell.barcodes <- read.table(
+    file = all.files[['barcode list']],
+    header = FALSE,
+    sep = '\t',
+    row.names = NULL,
+    skip = skip.cell
+  )
+  feature.names <- read.table(
+    file = all.files[['feature list']],
+    header = FALSE,
+    sep = '\t',
+    row.names = NULL,
+    skip = skip.feature
+  )
+  # read barcodes
+  bcols <- ncol(x = cell.barcodes)
+  if (bcols < cell.column) {
+    stop(
+      "cell.column was set to ",
+      cell.column,
+      " but ",
+      cells,
+      " only has ",
+      bcols,
+      " columns.",
+      " Try setting the cell.column argument to a value <= to ",
+      bcols,
+      "."
+    )
+  }
+  cell.names <- cell.barcodes[, cell.column]
+  if (all(grepl(pattern = "\\-1$", x = cell.names)) & strip.suffix) {
+    cell.names <- as.vector(x = as.character(x = sapply(
+      X = cell.names,
+      FUN = ExtractField,
+      field = 1,
+      delim = "-"
+    )))
+  }
+  # read features
+  fcols <- ncol(x = feature.names)
+  if (fcols < feature.column) {
+    stop(
+      "feature.column was set to ",
+      feature.column,
+      " but ",
+      features,
+      " only has ",
+      fcols, " column(s).",
+      " Try setting the feature.column argument to a value <= to ",
+      fcols,
+      "."
+    )
+  }
+  if (any(is.na(x = feature.names[, feature.column]))) {
+    na.features <- which(x = is.na(x = feature.names[, feature.column]))
+    replacement.column <- ifelse(test = feature.column == 2, yes = 1, no = 2)
+    if (replacement.column > fcols) {
+      stop(
+        "Some features names are NA in column ",
+        feature.column,
+        ". Try specifiying a different column.",
+        call. = FALSE
+        )
+    } else {
+      warning(
+        "Some features names are NA in column ",
+        feature.column,
+        ". Replacing NA names with ID from column ",
+        replacement.column,
+        ".",
+        call. = FALSE
+        )
+    }
+    feature.names[na.features, feature.column] <- feature.names[na.features, replacement.column]
+  }
+  feature.names <- feature.names[, feature.column]
+  if (unique.features) {
+    feature.names <- make.unique(names = feature.names)
+  }
+  data <- readMM(file = all.files[['expression matrix']])
+  if (length(x = cell.names) != ncol(x = data)) {
+    stop(
+      "Matrix has ",
+      ncol(data),
+      " columns but found ", length(cell.names),
+      " barcodes. ",
+      ifelse(
+        test = length(x = cell.names) > ncol(x = data),
+        yes = "Try increasing `skip.cell`. ",
+        no = ""
+      ),
+      call. = FALSE
+      )
+  }
+  if (length(x = feature.names) != nrow(x = data)) {
+    stop(
+      "Matrix has ",
+      ncol(data),
+      " rows but found ", length(feature.names),
+      " features. ",
+      ifelse(
+        test = length(x = feature.names) > nrow(x = data),
+        yes = "Try increasing `skip.feature`. ",
+        no = ""
+      ),
+      call. = FALSE
+      )
+  }
+
+  colnames(x = data) <- cell.names
+  rownames(x = data) <- feature.names
+  data <- as(data, Class = "dgCMatrix")
+  return(data)
+}
+
 #' Load Slide-seq spatial data
 #'
 #' @param coord.file Path to csv file containing bead coordinate positions
@@ -1271,6 +1235,7 @@ Read10X_Image <- function(image.dir, filter.matrix = TRUE, ...) {
 #' @seealso \code{\link{SlideSeq}}
 #'
 #' @export
+#' @concept preprocessing
 #'
 ReadSlideSeq <- function(coord.file, assay = 'Spatial') {
   if (!file.exists(paths = coord.file)) {
@@ -1304,6 +1269,7 @@ ReadSlideSeq <- function(coord.file, assay = 'Spatial') {
 #' @importFrom methods as
 #'
 #' @export
+#' @concept preprocessing
 #'
 #' @examples
 #' mat <- matrix(data = rbinom(n = 25, size = 5, prob = 0.2), nrow = 5)
@@ -1336,9 +1302,11 @@ RelativeCounts <- function(data, scale.factor = 1, verbose = TRUE) {
 #' @param data Matrix containing the data used as "marks" (e.g. gene expression)
 #' @param ... Arguments passed to markvario
 #'
-#' @importFrom spatstat markvario ppp
+#' @importFrom spatstat.core markvario
+#' @importFrom spatstat.geom ppp
 #'
 #' @export
+#' @concept preprocessing
 #'
 RunMarkVario <- function(
   spatial.location,
@@ -1383,6 +1351,7 @@ RunMarkVario <- function(
 #' @importFrom stats dist
 #'
 #' @export
+#' @concept preprocessing
 #'
 RunMoransI <- function(data, pos, verbose = TRUE) {
   mysapply <- sapply
@@ -1425,9 +1394,10 @@ RunMoransI <- function(data, pos, verbose = TRUE) {
       error = function(x) c(1,1,1,1)
     )
   })
+  pcol <- ifelse(test = Rfast2.installed, yes = 2, no = 4)
   results <- data.frame(
     observed = unlist(x = results[1, ]),
-    p.value = unlist(x = results[2, ])
+    p.value = unlist(x = results[pcol, ])
   )
   rownames(x = results) <- rownames(x = data)
   return(results)
@@ -1449,8 +1419,10 @@ RunMoransI <- function(data, pos, verbose = TRUE) {
 #' @return Matrix with downsampled data
 #'
 #' @export
+#' @concept preprocessing
 #'
 #' @examples
+#' data("pbmc_small")
 #' counts = as.matrix(x = GetAssayData(object = pbmc_small, assay = "RNA", slot = "counts"))
 #' downsampled = SampleUMI(data = counts)
 #' head(x = downsampled)
@@ -1496,13 +1468,21 @@ SampleUMI <- function(
 #' @param object A seurat object
 #' @param assay Name of assay to pull the count data from; default is 'RNA'
 #' @param new.assay.name Name for the new assay containing the normalized data
+#' @param reference.SCT.model If not NULL, compute residuals for the object
+#' using the provided SCT model; supports only log_umi as the latent variable.
+#' If residual.features are not specified, compute for the top variable.features.n
+#' specified in the model which are also present in the object. If
+#' residual.features are specified, the variable features of the resulting SCT
+#' assay are set to the top variable.features.n in the model.
 #' @param do.correct.umi Place corrected UMI matrix in assay counts slot; default is TRUE
-#' @param ncells Number of subsampling cells used to build NB regression; default is NULL
+#' @param ncells Number of subsampling cells used to build NB regression; default is 5000
+#' @param residual.features Genes to calculate residual features for; default is NULL (all genes).
+#' If specified, will be set to VariableFeatures of the returned object.
 #' @param variable.features.n Use this many features as variable features after
-#' ranking by residual variance; default is 3000
+#' ranking by residual variance; default is 3000. Only applied if residual.features is not set.
 #' @param variable.features.rv.th Instead of setting a fixed number of variable features,
 #' use this residual variance cutoff; this is only used when \code{variable.features.n}
-#' is set to NULL; default is 1.3
+#' is set to NULL; default is 1.3. Only applied if residual.features is not set.
 #' @param vars.to.regress Variables to regress out in a second non-regularized linear
 #' regression. For example, percent.mito. Default is NULL
 #' @param do.scale Whether to scale residuals to have unit variance; default is FALSE
@@ -1529,16 +1509,20 @@ SampleUMI <- function(
 #'
 #' @seealso \code{\link[sctransform]{correct_counts}} \code{\link[sctransform]{get_residuals}}
 #' @export
+#' @concept preprocessing
 #'
 #' @examples
+#' data("pbmc_small")
 #' SCTransform(object = pbmc_small)
 #'
 SCTransform <- function(
   object,
   assay = 'RNA',
   new.assay.name = 'SCT',
+  reference.SCT.model = NULL,
   do.correct.umi = TRUE,
-  ncells = NULL,
+  ncells = 5000,
+  residual.features = NULL,
   variable.features.n = 3000,
   variable.features.rv.th = 1.3,
   vars.to.regress = NULL,
@@ -1564,6 +1548,22 @@ SCTransform <- function(
     if (!(vst.args[['batch_var']] %in% colnames(x = cell.attr))) {
       stop('batch_var not found in seurat object meta data')
     }
+  }
+  # parameter checking when reference.SCT.model is set
+  if (!is.null(x = reference.SCT.model) ) {
+    if (inherits(x = reference.SCT.model, what = "SCTModel")) {
+      reference.SCT.model <- SCTModel_to_vst(SCTModel = reference.SCT.model)
+    }
+    if (is.list(x = reference.SCT.model) & inherits(x = reference.SCT.model[[1]], what = "SCTModel")) {
+      stop("reference.SCT.model must be one SCTModel rather than a list of SCTModel")
+    }
+    if ('latent_var' %in% names(x = vst.args)) {
+      stop('custom latent variables are not supported when reference.SCT.model is given')
+    }
+    if (reference.SCT.model$model_str != 'y ~ log_umi') {
+      stop('reference.SCT.model must be derived using default SCT regression formula, `y ~ log_umi`')
+    }
+
   }
   # check for latent_var in meta data
   if ('latent_var' %in% names(x = vst.args)) {
@@ -1599,30 +1599,79 @@ SCTransform <- function(
   vst.args[['return_cell_attr']] <- TRUE
   vst.args[['return_gene_attr']] <- TRUE
   vst.args[['return_corrected_umi']] <- do.correct.umi
-  vst.args[['n_cells']] <- ncells
+  vst.args[['n_cells']] <- min(ncells, ncol(x = umi))
   residual.type <- vst.args[['residual_type']] %||% 'pearson'
   res.clip.range <- vst.args[['res_clip_range']] %||% c(-sqrt(x = ncol(x = umi)), sqrt(x = ncol(x = umi)))
-  if (conserve.memory) {
-    return.only.var.genes <- TRUE
-  }
-  if (conserve.memory) {
-    vst.args[['residual_type']] <- 'none'
-    vst.out <- do.call(what = 'vst', args = vst.args)
-    feature.variance <- get_residual_var(
-      vst_out = vst.out,
-      umi = umi,
-      residual_type = residual.type,
-      res_clip_range = res.clip.range
-    )
-    vst.out$gene_attr$residual_variance <- NA_real_
-    vst.out$gene_attr[names(x = feature.variance), 'residual_variance'] <- feature.variance
+ # set sct normalization method
+  if (!is.null( reference.SCT.model)) {
+    sct.method <- "reference.model"
+  } else if (!is.null(x = residual.features)) {
+    sct.method <- "residual.features"
+  } else if (conserve.memory) {
+    sct.method <- "conserve.memory"
   } else {
-    vst.out <- do.call(what = 'vst', args = vst.args)
-    feature.variance <- setNames(
-      object = vst.out$gene_attr$residual_variance,
-      nm = rownames(x = vst.out$gene_attr)
-    )
+    sct.method <- "default"
   }
+
+  # set vst model
+  vst.out <- switch(
+    EXPR = sct.method,
+    'reference.model' = {
+      if (verbose) {
+        message("Using reference SCTModel to calculate pearson residuals")
+      }
+      do.center <- FALSE
+      do.correct.umi <- FALSE
+      vst.out <- reference.SCT.model
+      clip.range <- vst.out$arguments$sct.clip.range
+      umi.field <- paste0("nCount_", assay)
+      vst.out$cell_attr <-
+        if (umi.field %in% colnames(x = object[[]])) {
+          data.frame(log_umi = log10(x = object[[umi.field, drop = T]]))
+        } else {
+          data.frame(log_umi = log10(x = CalcN(object = object[[assay]])$nCount))
+        }
+      all.features  <- intersect(
+        x =  rownames(x = vst.out$gene_attr),
+        y = rownames(x = umi)
+      )
+      vst.out$gene_attr <- vst.out$gene_attr[all.features ,]
+      vst.out$model_pars_fit <- vst.out$model_pars_fit[all.features,]
+      vst.out
+    },
+    'residual.features' = {
+      if (verbose) {
+        message("Computing residuals for the ", length(x = residual.features), " specified features")
+      }
+      return.only.var.genes <- TRUE
+      do.correct.umi <- FALSE
+      vst.args[['return_corrected_umi']] <- FALSE
+      vst.args[['residual_type']] <- 'none'
+      vst.out <- do.call(what = 'vst', args = vst.args)
+      vst.out$gene_attr$residual_variance <- NA_real_
+      vst.out
+    },
+    'conserve.memory' = {
+      return.only.var.genes <- TRUE
+      vst.args[['residual_type']] <- 'none'
+      vst.out <- do.call(what = 'vst', args = vst.args)
+      feature.variance <- get_residual_var(
+        vst_out = vst.out,
+        umi = umi,
+        residual_type = residual.type,
+        res_clip_range = res.clip.range
+      )
+      vst.out$gene_attr$residual_variance <- NA_real_
+      vst.out$gene_attr[names(x = feature.variance), 'residual_variance'] <- feature.variance
+      vst.out
+    },
+    'default' = {
+      vst.out <- do.call(what = 'vst', args = vst.args)
+      vst.out
+    })
+
+  feature.variance <- vst.out$gene_attr[,"residual_variance"]
+  names(x = feature.variance) <- rownames(x = vst.out$gene_attr)
   if (verbose) {
     message('Determine variable features')
   }
@@ -1632,51 +1681,98 @@ SCTransform <- function(
   } else {
     top.features <- names(x = feature.variance)[feature.variance >= variable.features.rv.th]
   }
-  if (verbose) {
-    message('Set ', length(x = top.features), ' variable features')
-  }
-  if (conserve.memory) {
-    # actually get the residuals this time
-    if (verbose) {
-      message("Return only variable features for scale.data slot of the output assay")
-    }
-    vst.out$y <- get_residuals(
-      vst_out = vst.out,
-      umi = umi[top.features, ],
-      residual_type = residual.type,
-      res_clip_range = res.clip.range
-    )
-    if (do.correct.umi & residual.type == 'pearson') {
-      vst.out$umi_corrected <- correct_counts(
-        x = vst.out,
-        umi = umi,
-        verbosity = as.numeric(x = verbose) * 2
+
+  # get residuals
+  vst.out <- switch(
+    EXPR = sct.method,
+    'reference.model' = {
+      if (is.null(x = residual.features)) {
+        residual.features <- top.features
+      }
+      residual.features <- Reduce(
+        f = intersect,
+        x = list(residual.features, rownames(x = umi), rownames(x = vst.out$model_pars_fit))
       )
-    }
-  }
+      residual.feature.mat <- get_residuals(
+        vst_out = vst.out,
+        umi = umi[residual.features, , drop = FALSE],
+        verbosity = as.numeric(x = verbose)*2
+      )
+      vst.out$gene_attr <- vst.out$gene_attr[residual.features ,]
+      ref.residuals.mean <- vst.out$gene_attr[,"residual_mean"]
+      vst.out$y <- sweep(
+        x = residual.feature.mat,
+        MARGIN = 1,
+        STATS = ref.residuals.mean,
+        FUN = "-"
+      )
+      vst.out
+    },
+    'residual.features' = {
+      residual.features <- intersect(
+        x = residual.features,
+        y = rownames(x = vst.out$gene_attr)
+      )
+      residual.feature.mat <- get_residuals(
+        vst_out = vst.out,
+        umi = umi[residual.features, , drop = FALSE],
+        verbosity = as.numeric(x = verbose)*2
+      )
+      vst.out$y <- residual.feature.mat
+      vst.out$gene_attr$residual_mean <- NA_real_
+      vst.out$gene_attr$residual_variance <- NA_real_
+      vst.out$gene_attr[residual.features, "residual_mean"] <- rowMeans2(x = vst.out$y)
+      vst.out$gene_attr[residual.features, "residual_variance"] <- RowVar(x = vst.out$y)
+      vst.out
+    },
+    'conserve.memory' = {
+      vst.out$y <- get_residuals(
+        vst_out = vst.out,
+        umi = umi[top.features, ],
+        residual_type = residual.type,
+        res_clip_range = res.clip.range,
+        verbosity = as.numeric(x = verbose)*2
+      )
+      vst.out$gene_attr$residual_mean <- NA_real_
+      vst.out$gene_attr[top.features, "residual_mean"] = rowMeans2(x =  vst.out$y)
+      if (do.correct.umi & residual.type == 'pearson') {
+        vst.out$umi_corrected <- correct_counts(
+          x = vst.out,
+          umi = umi,
+          verbosity = as.numeric(x = verbose) * 2
+        )
+      }
+      vst.out
+    },
+    'default' = {
+      if (return.only.var.genes) {
+        vst.out$y <- vst.out$y[top.features, ]
+      }
+      vst.out
+    })
   # create output assay and put (corrected) umi counts in count slot
   if (do.correct.umi & residual.type == 'pearson') {
     if (verbose) {
       message('Place corrected count matrix in counts slot')
     }
-    assay.out <- CreateAssayObject(counts = vst.out$umi_corrected)
+    # TODO: restore once check.matrix is in SeuratObject
+    # assay.out <- CreateAssayObject(counts = vst.out$umi_corrected, check.matrix = FALSE)
+    assay.out <- CreateAssayObject(counts = vst.out$umi_corrected,)
     vst.out$umi_corrected <- NULL
   } else {
+    # TODO: restore once check.matrix is in SeuratObject
+    # assay.out <- CreateAssayObject(counts = umi, check.matrix = FALSE)
     assay.out <- CreateAssayObject(counts = umi)
   }
   # set the variable genes
-  VariableFeatures(object = assay.out) <- top.features
+  VariableFeatures(object = assay.out) <- residual.features %||% top.features
   # put log1p transformed counts in data
   assay.out <- SetAssayData(
     object = assay.out,
     slot = 'data',
     new.data = log1p(x = GetAssayData(object = assay.out, slot = 'counts'))
   )
-  if (return.only.var.genes & !conserve.memory) {
-    scale.data <- vst.out$y[top.features, ]
-  } else {
-    scale.data <- vst.out$y
-  }
+  scale.data <- vst.out$y
   # clip the residuals
   scale.data[scale.data < clip.range[1]] <- clip.range[1]
   scale.data[scale.data > clip.range[2]] <- clip.range[2]
@@ -1704,11 +1800,11 @@ SCTransform <- function(
   vst.out$y <- NULL
   # save clip.range into vst model
   vst.out$arguments$sct.clip.range <- clip.range
+  vst.out$arguments$sct.method <- sct.method
   Misc(object = assay.out, slot = 'vst.out') <- vst.out
-  Misc(object = assay.out, slot = 'umi.assay') <- assay
-  # also put gene attributes in meta.features
-  assay.out[[paste0('sct.', names(x = vst.out$gene_attr))]] <- vst.out$gene_attr
-  assay.out[['sct.variable']] <- rownames(x = assay.out[[]]) %in% top.features
+  assay.out <- as(object = assay.out, Class = "SCTAssay")
+  assay.out <- SCTAssay(assay.out, assay.orig = assay)
+  slot(object = slot(object = assay.out, name = "SCTModel.list")[[1]], name = "umi.assay") <- assay
   object[[new.assay.name]] <- assay.out
   if (verbose) {
     message(paste("Set default assay to", new.assay.name))
@@ -1730,11 +1826,13 @@ SCTransform <- function(
 #' @return Returns a subsetted Seurat object.
 #'
 #' @export
+#' @concept preprocessing
 #'
 #' @author Robert A. Amezquita, \email{robert.amezquita@fredhutch.org}
 #' @seealso \code{\link{CalculateBarcodeInflections}} \code{\link{BarcodeInflectionsPlot}}
 #'
 #' @examples
+#' data("pbmc_small")
 #' pbmc_small <- CalculateBarcodeInflections(
 #'   object = pbmc_small,
 #'   group.column = 'groups',
@@ -1749,43 +1847,6 @@ SubsetByBarcodeInflections <- function(object) {
     stop("Barcode inflections not calculated, please run CalculateBarcodeInflections")
   }
   return(object[, cbi.data$cells_pass])
-}
-
-#' Term frequency-inverse document frequency
-#'
-#' Normalize binary data per cell using the term frequency-inverse document frequency
-#' normalization method (TF-IDF).
-#' This is suitable for the normalization of binary ATAC peak datasets.
-#'
-#' @param data Matrix with the raw count data
-#' @param verbose Print progress
-#'
-#' @return Returns a matrix with the normalized data
-#'
-#' @importFrom Matrix colSums rowSums
-#'
-#' @export
-#'
-#' @examples
-#' mat <- matrix(data = rbinom(n = 25, size = 5, prob = 0.2), nrow = 5)
-#' mat_norm <- TF.IDF(data = mat)
-#'
-TF.IDF <- function(data, verbose = TRUE) {
-  if (is.data.frame(x = data)) {
-    data <- as.matrix(x = data)
-  }
-  if (!inherits(x = data, what = 'dgCMatrix')) {
-    data <- as(object = data, Class = "dgCMatrix")
-  }
-  if (verbose) {
-    message("Performing TF-IDF normalization")
-  }
-  npeaks <- colSums(x = data)
-  tf <- t(x = t(x = data) / npeaks)
-  idf <- ncol(x = data) / rowSums(x = data)
-  norm.data <- Diagonal(n = length(x = idf), x = idf) %*% tf
-  norm.data[which(x = is.na(x = norm.data))] <- 0
-  return(norm.data)
 }
 
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -1830,6 +1891,7 @@ TF.IDF <- function(data, verbose = TRUE) {
 #' @param verbose show progress bar for calculations
 #'
 #' @rdname FindVariableFeatures
+#' @concept preprocessing
 #' @export
 #'
 FindVariableFeatures.default <- function(
@@ -1926,6 +1988,7 @@ FindVariableFeatures.default <- function(
 #' feature dispersions
 #'
 #' @rdname FindVariableFeatures
+#' @concept preprocessing
 #' @export
 #' @method FindVariableFeatures Assay
 #'
@@ -2004,10 +2067,29 @@ FindVariableFeatures.Assay <- function(
   return(object)
 }
 
-#' @inheritParams FindVariableFeatures.Assay
+#' @rdname FindVariableFeatures
+#' @export
+#' @method FindVariableFeatures SCTAssay
+#'
+FindVariableFeatures.SCTAssay <- function(
+  object,
+  nfeatures = 2000,
+  ...
+) {
+  if (length(x = slot(object = object, name = "SCTModel.list")) > 1) {
+    stop("SCT assay is comprised of multiple SCT models. To change the variable features, please set manually with VariableFeatures<-", call. = FALSE)
+  }
+  feature.attr <- SCTResults(object = object, slot = "feature.attributes")
+  nfeatures <- min(nfeatures, nrow(x = feature.attr))
+  top.features <- rownames(x = feature.attr)[order(feature.attr$residual_variance, decreasing = TRUE)[1:nfeatures]]
+  VariableFeatures(object = object) <- top.features
+  return(object)
+}
+
 #' @param assay Assay to use
 #'
 #' @rdname FindVariableFeatures
+#' @concept preprocessing
 #' @export
 #' @method FindVariableFeatures Seurat
 #'
@@ -2045,6 +2127,14 @@ FindVariableFeatures.Seurat <- function(
     ...
   )
   object[[assay]] <- assay.data
+  if (inherits(x = object[[assay]], what = "SCTAssay")) {
+    object <- GetResidual(
+      object = object,
+      assay = assay,
+      features = VariableFeatures(object = assay.data),
+      verbose = FALSE
+    )
+  }
   object <- LogSeuratCommand(object = object)
   return(object)
 }
@@ -2067,6 +2157,8 @@ FindVariableFeatures.Seurat <- function(
 #'
 #' @method FindSpatiallyVariableFeatures default
 #' @rdname FindSpatiallyVariableFeatures
+#' @concept preprocessing
+#' @concept spatial
 #' @export
 #'
 #'
@@ -2118,6 +2210,8 @@ FindSpatiallyVariableFeatures.default <- function(
 #'
 #' @method FindSpatiallyVariableFeatures Assay
 #' @rdname FindSpatiallyVariableFeatures
+#' @concept preprocessing
+#' @concept spatial
 #' @export
 #'
 FindSpatiallyVariableFeatures.Assay <- function(
@@ -2181,6 +2275,8 @@ FindSpatiallyVariableFeatures.Assay <- function(
 #'
 #' @method FindSpatiallyVariableFeatures Seurat
 #' @rdname FindSpatiallyVariableFeatures
+#' @concept preprocessing
+#' @concept spatial
 #' @export
 #'
 FindSpatiallyVariableFeatures.Seurat <- function(
@@ -2239,6 +2335,7 @@ FindSpatiallyVariableFeatures.Seurat <- function(
 #' @param verbose display progress bar for normalization procedure
 #'
 #' @rdname NormalizeData
+#' @concept preprocessing
 #' @export
 #'
 NormalizeData.default <- function(
@@ -2344,6 +2441,7 @@ NormalizeData.default <- function(
 }
 
 #' @rdname NormalizeData
+#' @concept preprocessing
 #' @export
 #' @method NormalizeData Assay
 #'
@@ -2373,11 +2471,13 @@ NormalizeData.Assay <- function(
 #' @param assay Name of assay to use
 #'
 #' @rdname NormalizeData
+#' @concept preprocessing
 #' @export
 #' @method NormalizeData Seurat
 #'
 #' @examples
 #' \dontrun{
+#' data("pbmc_small")
 #' pbmc_small
 #' pmbc_small <- NormalizeData(object = pbmc_small)
 #' }
@@ -2403,233 +2503,6 @@ NormalizeData.Seurat <- function(
   )
   object[[assay]] <- assay.data
   object <- LogSeuratCommand(object = object)
-  return(object)
-}
-
-#' @param k  The rank of the rank-k approximation. Set to NULL for automated choice of k.
-#' @param q  The number of additional power iterations in randomized SVD when
-#' computing rank k approximation. By default, q=10.
-#' @param quantile.prob The quantile probability to use when calculating threshold.
-#' By default, quantile.prob = 0.001.
-#' @param use.mkl Use the Intel MKL based implementation of SVD. Needs to be
-#' installed from https://github.com/KlugerLab/rpca-mkl. \strong{Note}: this requires
-#' the \href{https://github.com/satijalab/seurat-wrappers}{SeuratWrappers} implementation
-#' of \code{RunALRA}
-#' @param mkl.seed Only relevant if \code{use.mkl = TRUE}. Set the seed for the random
-#' generator for the Intel MKL implementation of SVD. Any number <0 will
-#' use the current timestamp. If \code{use.mkl = FALSE}, set the seed using
-#' \code{\link{set.seed}()} function as usual.
-#'
-#' @rdname RunALRA
-#' @export
-#'
-RunALRA.default <- function(
-  object,
-  k = NULL,
-  q = 10,
-  quantile.prob = 0.001,
-  use.mkl = FALSE,
-  mkl.seed = -1,
-  ...
-) {
-  CheckDots(...)
-  A.norm <- t(x = as.matrix(x = object))
-  message("Identifying non-zero values")
-  originally.nonzero <- A.norm > 0
-  message("Computing Randomized SVD")
-  if (use.mkl) {
-    warning(
-      "Using the Intel MKL-based implementation of SVD requires RunALRA from SeuratWrappers\n",
-      "For more details, see https://github.com/satijalab/seurat-wrappers\n",
-      "Continuing with standard SVD implementation",
-      call. = FALSE,
-      immediate. = TRUE
-    )
-  }
-  fastDecomp.noc <- rsvd(A = A.norm, k = k, q = q)
-  A.norm.rank.k <- fastDecomp.noc$u[, 1:k] %*%
-    diag(x = fastDecomp.noc$d[1:k]) %*%
-    t(x = fastDecomp.noc$v[,1:k])
-  message(sprintf("Find the %f quantile of each gene", quantile.prob))
-  A.norm.rank.k.mins <- abs(x = apply(
-    X = A.norm.rank.k,
-    MARGIN = 2,
-    FUN = function(x) {
-      return(quantile(x = x, probs = quantile.prob))
-    }
-  ))
-  message("Thresholding by the most negative value of each gene")
-  A.norm.rank.k.cor <- replace(
-    x = A.norm.rank.k,
-    list = A.norm.rank.k <= A.norm.rank.k.mins[col(A.norm.rank.k)],
-    values = 0
-  )
-  sd.nonzero <- function(x) {
-    return(sd(x[!x == 0]))
-  }
-  sigma.1 <- apply(X = A.norm.rank.k.cor, MARGIN = 2, FUN = sd.nonzero)
-  sigma.2 <- apply(X = A.norm, MARGIN = 2, FUN = sd.nonzero)
-  mu.1 <- colSums(x = A.norm.rank.k.cor) / colSums(x = !!A.norm.rank.k.cor)
-  mu.2 <- colSums(x = A.norm) / colSums(x = !!A.norm)
-  toscale <- !is.na(sigma.1) & !is.na(sigma.2) & !(sigma.1 == 0 & sigma.2 == 0) & !(sigma.1 == 0)
-  message(sprintf(fmt = "Scaling all except for %d columns", sum(!toscale)))
-  sigma.1.2 <- sigma.2 / sigma.1
-  toadd <- -1 * mu.1 * sigma.2 / sigma.1 + mu.2
-  A.norm.rank.k.temp <- A.norm.rank.k.cor[, toscale]
-  A.norm.rank.k.temp <- Sweep(
-    x = A.norm.rank.k.temp,
-    MARGIN = 2,
-    STATS = sigma.1.2[toscale],
-    FUN = "*"
-  )
-  A.norm.rank.k.temp <- Sweep(
-    x = A.norm.rank.k.temp,
-    MARGIN = 2,
-    STATS = toadd[toscale],
-    FUN = "+"
-  )
-  A.norm.rank.k.cor.sc <- A.norm.rank.k.cor
-  A.norm.rank.k.cor.sc[, toscale] <- A.norm.rank.k.temp
-  A.norm.rank.k.cor.sc[A.norm.rank.k.cor == 0] <- 0
-  lt0 <- A.norm.rank.k.cor.sc < 0
-  A.norm.rank.k.cor.sc[lt0] <- 0
-  message(sprintf(
-    fmt = "%.2f%% of the values became negative in the scaling process and were set to zero",
-    100 * sum(lt0) / prod(dim(x = A.norm))
-  ))
-  A.norm.rank.k.cor.sc[originally.nonzero & A.norm.rank.k.cor.sc == 0] <-
-    A.norm[originally.nonzero & A.norm.rank.k.cor.sc == 0]
-  colnames(x = A.norm.rank.k) <- colnames(x = A.norm.rank.k.cor.sc) <-
-    colnames(x = A.norm.rank.k.cor) <- colnames(x = A.norm)
-  original.nz <- sum(A.norm > 0) / prod(dim(x = A.norm))
-  completed.nz <- sum(A.norm.rank.k.cor.sc > 0) / prod(dim(x = A.norm))
-  message(sprintf(
-    fmt = "The matrix went from %.2f%% nonzero to %.2f%% nonzero",
-    100 * original.nz,
-    100 * completed.nz
-  ))
-  return(A.norm.rank.k.cor.sc)
-}
-
-#' @param assay Assay to use
-#' @param slot slot to use
-#' @param setDefaultAssay If TRUE, will set imputed results as default Assay
-#' @param genes.use genes to impute
-#' @param K Number of singular values to compute when choosing k. Must be less
-#' than the smallest dimension of the matrix. Default 100 or smallest dimension.
-#' @param thresh The threshold for ''significance'' when choosing k. Default 1e-10.
-#' @param noise.start Index for which all smaller singular values are considered noise.
-#' Default K - 20.
-#' @param q.k Number of additional power iterations when choosing k. Default 2.
-#' @param k.only If TRUE, only computes optimal k WITHOUT performing ALRA
-#'
-#' @importFrom rsvd rsvd
-#' @importFrom Matrix Matrix
-#' @importFrom stats sd setNames quantile
-#'
-#' @rdname RunALRA
-#' @export
-#' @method RunALRA Seurat
-#'
-RunALRA.Seurat <- function(
-  object,
-  k = NULL,
-  q = 10,
-  quantile.prob = 0.001,
-  use.mkl = FALSE,
-  mkl.seed=-1,
-  assay = NULL,
-  slot = "data",
-  setDefaultAssay = TRUE,
-  genes.use = NULL,
-  K = NULL,
-  thresh = 6,
-  noise.start = NULL,
-  q.k = 2,
-  k.only = FALSE,
-  ...
-) {
-  if (!is.null(x = k) && k.only) {
-    warning("Stop: k is already given, set k.only = FALSE or k = NULL")
-  }
-  genes.use <- genes.use %||% rownames(x = object)
-  assay <- assay %||% DefaultAssay(object = object)
-  alra.previous <- Tool(object = object, slot = 'RunALRA')
-  alra.info <- list()
-  # Check if k is already stored
-  if (is.null(x = k) & !is.null(alra.previous[["k"]])) {
-    k <- alra.previous[["k"]]
-    message("Using previously computed value of k")
-  }
-  data.used <- GetAssayData(object = object, assay = assay, slot = slot)[genes.use,]
-  # Choose k with heuristics if k is not given
-  if (is.null(x = k)) {
-    # set K based on data dimension
-    if (is.null(x = K)) {
-      K <- 100
-      if (K > min(dim(x = data.used))) {
-        K <- min(dim(x = data.used))
-        warning("For best performance, we recommend using ALRA on expression matrices larger than 100 by 100")
-      }
-    }
-    if (K > min(dim(x = data.used))) {
-      stop("For an m by n data, K must be smaller than the min(m,n)")
-    }
-    # set noise.start based on K
-    if (is.null(x = noise.start)) {
-      noise.start <- K - 20
-      if (noise.start <= 0) {
-        noise.start <- max(K - 5, 1)
-      }
-    }
-    if (noise.start > K - 5) {
-      stop("There need to be at least 5 singular values considered noise")
-    }
-    noise.svals <- noise.start:K
-    if (use.mkl) {
-      warning(
-        "Using the Intel MKL-based implementation of SVD requires RunALRA from SeuratWrappers\n",
-        "For more details, see https://github.com/satijalab/seurat-wrappers\n",
-        "Continuing with standard SVD implementation",
-        call. = FALSE,
-        immediate. = TRUE
-      )
-    }
-    rsvd.out <- rsvd(A = t(x = as.matrix(x = data.used)), k = K, q = q.k)
-    diffs <- rsvd.out$d[1:(length(x = rsvd.out$d)-1)] - rsvd.out$d[2:length(x = rsvd.out$d)]
-    mu <- mean(x = diffs[noise.svals - 1])
-    sigma <- sd(x = diffs[noise.svals - 1])
-    num_of_sds <- (diffs - mu) / sigma
-    k <- max(which(x = num_of_sds > thresh))
-    alra.info[["d"]] <- rsvd.out$d
-    alra.info[["k"]] <- k
-    alra.info[["diffs"]] <- diffs
-    Tool(object = object) <- alra.info
-  }
-  if (k.only) {
-    message("Chose rank k = ", k, ", WITHOUT performing ALRA")
-    return(object)
-  }
-  message("Rank k = ", k)
-  # Perform ALRA on data.used
-  output.alra <- RunALRA(
-    object = data.used,
-    k = k,
-    q = q,
-    quantile.prob = quantile.prob,
-    use.mkl = use.mkl,
-    mkl.seed = mkl.seed
-  )
-  # Save ALRA data in object@assay
-  data.alra <- Matrix(data = t(x = output.alra), sparse = TRUE)
-  rownames(x = data.alra) <- genes.use
-  colnames(x = data.alra) <- colnames(x = object)
-  assay.alra <- CreateAssayObject(data = data.alra)
-  object[["alra"]] <- assay.alra
-  if (setDefaultAssay) {
-    message("Setting default assay as alra")
-    DefaultAssay(object = object) <- "alra"
-  }
   return(object)
 }
 
@@ -2662,6 +2535,7 @@ RunALRA.Seurat <- function(
 #' @importFrom future.apply future_lapply
 #'
 #' @rdname ScaleData
+#' @concept preprocessing
 #' @export
 #'
 ScaleData.default <- function(
@@ -2901,6 +2775,7 @@ ScaleData.default <- function(
 }
 
 #' @rdname ScaleData
+#' @concept preprocessing
 #' @export
 #' @method ScaleData Assay
 #'
@@ -2958,6 +2833,7 @@ ScaleData.Assay <- function(
 #' @param assay Name of Assay to scale
 #'
 #' @rdname ScaleData
+#' @concept preprocessing
 #' @export
 #' @method ScaleData Seurat
 #'
@@ -3260,91 +3136,111 @@ FindThresh <- function(call.list) {
 # Useful if you want to change the clip.range.
 # @param verbose Whether to print messages and progress bars
 #
-# @return Returns a Seurat object containing  pearson residuals of added features in its scale.data
+# @return Returns a matrix containing not-centered pearson residuals of added features
 #
 #' @importFrom sctransform get_residuals
 #
-GetResidualVstOut <- function(
+GetResidualSCTModel <- function(
   object,
   assay,
-  umi.assay,
+  SCTModel,
   new_features,
-  vst_out,
   clip.range,
+  replace.value,
   verbose
 ) {
-  diff_features <- setdiff(
-    x = new_features,
-    y = rownames(x = vst_out$model_pars_fit)
-  )
-  intersect_feature <- intersect(
-    x = new_features,
-    y = rownames(x = vst_out$model_pars_fit)
-  )
+  clip.range <- clip.range %||% SCTResults(object = object[[assay]], slot = "clips", model = SCTModel)$sct
+  model.features <- rownames(x = SCTResults(object = object[[assay]], slot = "feature.attributes", model = SCTModel))
+  umi.assay <- SCTResults(object = object[[assay]], slot = "umi.assay", model = SCTModel)
+  model.cells <- Cells(x = slot(object = object[[assay]], name = "SCTModel.list")[[SCTModel]])
+  sct.method <-  SCTResults(object = object[[assay]], slot = "arguments", model = SCTModel)$sct.method %||% "default"
+  scale.data.cells <- colnames(x = GetAssayData(object = object, assay = assay, slot = "scale.data"))
+  if (length(x = setdiff(x = model.cells, y =  scale.data.cells)) == 0) {
+  existing_features <- names(x = which(x = ! apply(
+    X = GetAssayData(object = object, assay = assay, slot = "scale.data")[, model.cells],
+    MARGIN = 1,
+    FUN = anyNA)
+  ))
+ } else {
+   existing_features <- character()
+ }
+  if (replace.value) {
+    features_to_compute <- new_features
+  } else {
+    features_to_compute <- setdiff(x = new_features, y = existing_features)
+  }
+  if (sct.method == "reference.model") {
+    if (verbose) {
+      message("sct.model ", SCTModel, " is from reference, so no residuals will be recalculated")
+    }
+    features_to_compute <- character()
+  }
+  if (!umi.assay %in% Assays(object = object)) {
+    warning("The umi assay (", umi.assay, ") is not present in the object. ",
+             "Cannot compute additional residuals.", call. = FALSE, immediate. = TRUE)
+    return(NULL)
+  }
+  diff_features <- setdiff(x = features_to_compute, y = model.features)
+  intersect_features <- intersect(x = features_to_compute, y = model.features)
   if (length(x = diff_features) == 0) {
-    umi <- GetAssayData(object = object, assay = umi.assay, slot = "counts" )[new_features, , drop = FALSE]
+    umi <- GetAssayData(object = object, assay = umi.assay, slot = "counts" )[features_to_compute, model.cells, drop = FALSE]
   } else {
-
     warning(
-      "The following ", length(x = diff_features),
-      " features do not exist in the counts slot: ",
-      paste(diff_features, collapse = " ")
+      "In the SCTModel ", SCTModel, ", the following ", length(x = diff_features),
+      " features do not exist in the counts slot: ", paste(diff_features, collapse = ", ")
     )
+    if (length(x = intersect_features) == 0) {
+      return(matrix(
+        data = NA,
+        nrow = length(x = features_to_compute),
+        ncol = length(x = model.cells),
+        dimnames = list(features_to_compute, model.cells)
+      ))
+    }
+    umi <- GetAssayData(object = object, assay = umi.assay, slot = "counts")[intersect_features, model.cells, drop = FALSE]
+  }
+  clip.max <- max(clip.range)
+  clip.min <- min(clip.range)
+  if (nrow(x = umi) > 0) {
+    vst_out <- SCTModel_to_vst(SCTModel = slot(object = object[[assay]], name = "SCTModel.list")[[SCTModel]])
+    if (verbose) {
+      message("sct.model: ", SCTModel)
+    }
+    new_residual <- get_residuals(
+      vst_out = vst_out,
+      umi = umi,
+      residual_type = "pearson",
+      res_clip_range = c(clip.min, clip.max),
+      verbosity = as.numeric(x = verbose) * 2
+    )
+    new_residual <- as.matrix(x = new_residual)
+    # centered data
+    new_residual <- new_residual - rowMeans(x = new_residual)
+  } else {
+    new_residual <- matrix(data = NA, nrow = 0, ncol = length(x = model.cells), dimnames = list(c(), model.cells))
+  }
+  old.features <- setdiff(x = new_features, y = features_to_compute)
+  if (length(x = old.features) > 0) {
+    old_residuals <- GetAssayData(object = object[[assay]], slot = "scale.data")[old.features, model.cells, drop = FALSE]
+    new_residual <- rbind(new_residual, old_residuals)[new_features, ]
+  }
+  return(new_residual)
+}
 
-    if (length(x = intersect_feature) == 0) {
-      return(object)
-    }
-    umi <- GetAssayData(object = object, assay = umi.assay, slot = "counts" )[intersect_feature, , drop = FALSE]
-  }
-  if (is.null(x = clip.range)) {
-    if(length(vst_out$arguments$sct.clip.range)!=0 ){
-    clip.max <- max(vst_out$arguments$sct.clip.range)
-    clip.min <- min(vst_out$arguments$sct.clip.range)
-    } else{
-      clip.max <- max(vst_out$arguments$res_clip_range)
-      clip.min <- min(vst_out$arguments$res_clip_range)
-    }
-  } else {
-    clip.max <- max(clip.range)
-    clip.min <- min(clip.range)
-  }
-  new_residual <- get_residuals(
-    vst_out = vst_out,
-    umi = umi,
-    residual_type = "pearson",
-    res_clip_range = c(clip.min, clip.max),
-    verbosity = as.numeric(x = verbose) * 2
-  )
-  new_residual <- as.matrix(x = new_residual)
-  # centered data
-  new_residual <- new_residual - rowMeans(new_residual)
-  # remove genes from the scale.data if genes are part of new_features
-  scale.data <- GetAssayData(object = object, assay = assay, slot = "scale.data")
-  object <- SetAssayData(
-    object = object,
-    assay = assay,
-    slot = "scale.data",
-    new.data = scale.data[!rownames(x = scale.data) %in% new_features, , drop = FALSE]
-  )
-  if (nrow(x = GetAssayData(object = object, slot = 'scale.data', assay = assay)) == 0 ) {
-    object <- SetAssayData(
-      object = object,
-      slot = 'scale.data',
-      new.data = new_residual,
-      assay = assay
-    )
-  } else {
-    object <- SetAssayData(
-      object = object,
-      slot = 'scale.data',
-      new.data = rbind(
-        GetAssayData(object = object, slot = 'scale.data', assay = assay),
-        new_residual
-      ),
-      assay = assay
-    )
-  }
-  return(object)
+# Convert SCTModel class to vst_out used in the sctransform
+# @param SCTModel
+# @return Return a list containing sct model
+#
+SCTModel_to_vst <- function(SCTModel) {
+  feature.params <- c("theta", "(Intercept)",  "log_umi")
+  feature.attrs <- c("residual_mean", "residual_variance" )
+  vst_out <- list()
+  vst_out$model_str <- slot(object = SCTModel, name = "model")
+  vst_out$model_pars_fit <- as.matrix(x = slot(object = SCTModel, name = "feature.attributes")[, feature.params])
+  vst_out$gene_attr <- slot(object = SCTModel, name = "feature.attributes")[, feature.attrs]
+  vst_out$cell_attr <- slot(object = SCTModel, name = "cell.attributes")
+  vst_out$arguments <- slot(object = SCTModel, name = "arguments")
+  return(vst_out)
 }
 
 # Local maxima estimator
